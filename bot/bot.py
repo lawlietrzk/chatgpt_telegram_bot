@@ -49,6 +49,7 @@ HELP_MESSAGE = """Commands:
 ⚪ /settings – Show settings
 ⚪ /balance – Show balance
 ⚪ /help – Show help
+⚪ /enter_url – Enter Reddit page url
 
 🎨 Generate images from text prompts in <b>👩‍🎨 Artist</b> /mode
 👥 Add bot to <b>group chat</b>: /help_group_chat
@@ -231,6 +232,7 @@ async def message_handle(update: Update, context: CallbackContext, message=None,
                  return
 
             dialog_messages = db.get_dialog_messages(user_id, dialog_id=None)
+
             parse_mode = {
                 "html": ParseMode.HTML,
                 "markdown": ParseMode.MARKDOWN
@@ -623,6 +625,16 @@ async def edited_message_handle(update: Update, context: CallbackContext):
         text = "🥲 Unfortunately, message <b>editing</b> is not supported"
         await update.edited_message.reply_text(text, parse_mode=ParseMode.HTML)
 
+async def get_reddit_content(update: Update, context: CallbackContext):
+    await register_user_if_not_exists(update, context, update.message.from_user)
+    user_id = update.message.from_user.id
+
+    db.set_user_attribute(user_id, "last_interaction", datetime.now())
+    db.start_new_dialog(user_id)
+
+    reply_text = "Please enter a Reddit URL. Make sure to enter a valid Reddit URL to get the best results."
+    await update.message.reply_text(reply_text, parse_mode=ParseMode.HTML)
+    
 
 async def error_handle(update: Update, context: CallbackContext) -> None:
     logger.error(msg="Exception while handling an update:", exc_info=context.error)
@@ -649,6 +661,10 @@ async def error_handle(update: Update, context: CallbackContext) -> None:
     except:
         await context.bot.send_message(update.effective_chat.id, "Some error in error handler")
 
+#Modify this to set starting commands.
+#/reddit_url : enter the reddit url
+#/subreddit : Enter subreddit to get updates from
+#/summary: Receive updates and ask about the update
 async def post_init(application: Application):
     await application.bot.set_my_commands([
         BotCommand("/new", "Start new dialog"),
@@ -657,6 +673,7 @@ async def post_init(application: Application):
         BotCommand("/balance", "Show balance"),
         BotCommand("/settings", "Show settings"),
         BotCommand("/help", "Show help message"),
+        BotCommand("/enter_url", "Enter a reddit url"),
     ])
 
 def run_bot() -> None:
@@ -673,6 +690,8 @@ def run_bot() -> None:
 
     # add handlers
     user_filter = filters.ALL
+
+    #Remember to remove this , or keep it
     if len(config.allowed_telegram_usernames) > 0:
         usernames = [x for x in config.allowed_telegram_usernames if isinstance(x, str)]
         any_ids = [x for x in config.allowed_telegram_usernames if isinstance(x, int)]
@@ -688,6 +707,7 @@ def run_bot() -> None:
     application.add_handler(CommandHandler("retry", retry_handle, filters=user_filter))
     application.add_handler(CommandHandler("new", new_dialog_handle, filters=user_filter))
     application.add_handler(CommandHandler("cancel", cancel_handle, filters=user_filter))
+    application.add_handler(CommandHandler("enter_url", get_reddit_content, filters=user_filter))
 
     application.add_handler(MessageHandler(filters.VOICE & user_filter, voice_message_handle))
 

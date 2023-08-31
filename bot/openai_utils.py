@@ -1,8 +1,12 @@
 import config
-
+import reddit_utils
 import tiktoken
 import openai
+import logging
+import llm_utils
 
+logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(filename='app.log', level=logging.DEBUG)
 
 # setup openai
 openai.api_key = config.openai_api_key
@@ -34,7 +38,12 @@ class ChatGPT:
         while answer is None:
             try:
                 if self.model in {"gpt-3.5-turbo-16k", "gpt-3.5-turbo", "gpt-4"}:
-                    messages = self._generate_prompt_messages(message, dialog_messages, chat_mode)
+                    #Add check here so that everything goes into 'messages'
+                    if reddit_utils.is_reddit_url(message):
+                        messages = self._generate_prompt_for_thread(message, chat_mode)
+                    else:
+                        messages = self._generate_prompt_messages(message, dialog_messages, chat_mode)
+
                     r = await openai.ChatCompletion.acreate(
                         model=self.model,
                         messages=messages,
@@ -42,7 +51,12 @@ class ChatGPT:
                     )
                     answer = r.choices[0].message["content"]
                 elif self.model == "text-davinci-003":
-                    prompt = self._generate_prompt(message, dialog_messages, chat_mode)
+                    if reddit_utils.is_reddit_url(message):    
+                        #Let's see what happens if i keep the function the same for both models
+                        prompt = self._generate_prompt_for_thread(message, chat_mode)
+                    else:
+                        prompt = self._generate_prompt(message, dialog_messages, chat_mode)
+
                     r = await openai.Completion.acreate(
                         engine=self.model,
                         prompt=prompt,
@@ -74,7 +88,11 @@ class ChatGPT:
         while answer is None:
             try:
                 if self.model in {"gpt-3.5-turbo-16k", "gpt-3.5-turbo", "gpt-4"}:
-                    messages = self._generate_prompt_messages(message, dialog_messages, chat_mode)
+                    if reddit_utils.is_reddit_url(message):
+                        messages = self._generate_prompt_for_thread(message, chat_mode)
+                    else:
+                        messages = self._generate_prompt_messages(message, dialog_messages, chat_mode)
+
                     r_gen = await openai.ChatCompletion.acreate(
                         model=self.model,
                         messages=messages,
@@ -91,7 +109,12 @@ class ChatGPT:
                             n_first_dialog_messages_removed = n_dialog_messages_before - len(dialog_messages)
                             yield "not_finished", answer, (n_input_tokens, n_output_tokens), n_first_dialog_messages_removed
                 elif self.model == "text-davinci-003":
-                    prompt = self._generate_prompt(message, dialog_messages, chat_mode)
+                    if reddit_utils.is_reddit_url(message):    
+                        #Let's see what happens if i keep the function the same for both models
+                        prompt = self._generate_prompt_for_thread(message, chat_mode)
+                    else:
+                        prompt = self._generate_prompt(message, dialog_messages, chat_mode)
+
                     r_gen = await openai.Completion.acreate(
                         engine=self.model,
                         prompt=prompt,
@@ -116,6 +139,39 @@ class ChatGPT:
                 dialog_messages = dialog_messages[1:]
 
         yield "finished", answer, (n_input_tokens, n_output_tokens), n_first_dialog_messages_removed  # sending final answer
+
+    def _generate_prompt_for_thread(self, url, chat_mode):
+        reddit_data = reddit_utils.get_reddit_praw(url)
+
+        title, selftext, subreddit, comments = (
+            reddit_data["title"],
+            reddit_data["selftext"],
+            reddit_data["subreddit"],
+            reddit_data["comments"],
+        )
+
+        if not comments:
+            comments = "No Comments"
+
+        #NOTE: Setting chunk token length to 2000 for now
+        groups = llm_utils.group_bodies_into_chunks(comments, 2000)
+
+
+        if len(groups) == 0:
+            groups = ["No Comments"]
+
+        if (selftext is None) or (len(selftext) == 0):
+            selftext = "No selftext"
+        
+        #NOTE: Setting chunk token length to 2000 for now
+        groups = (
+            llm_utils.group_bodies_into_chunks(comments, 2000)
+            if len(groups) > 0
+            else ["No Comments"]
+        )
+
+        
+        return [{"role": "system", "content": "Doing good with the URL so far"}]
 
     def _generate_prompt(self, message, dialog_messages, chat_mode):
         prompt = config.chat_modes[chat_mode]["prompt_start"]

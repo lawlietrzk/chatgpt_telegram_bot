@@ -64,7 +64,8 @@ def get_reddit_praw(
     """
     Process the reddit thread JSON and generate a summary.
     """
-    json_url = replace_last_token_with_json(reddit_url)
+    # json_url = replace_last_token_with_json(reddit_url)
+    json_url = reddit_url
 
     try:
         # Get the subreddit and metadata from the JSON

@@ -4,15 +4,56 @@ import tiktoken
 import openai
 import logging
 import llm_utils
+from typing import List
+from datetime import datetime
+import pandas as pd
+import pinecone
+
+from langchain.chat_models import ChatOpenAI
+from langchain.chains.conversation.memory import ConversationBufferWindowMemory
+from langchain.chains import RetrievalQA
+from langchain.embeddings.openai import OpenAIEmbeddings
+from langchain.agents import Tool
+from langchain.agents import initialize_agent
+from langchain.vectorstores import Pinecone
 
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
 logging.basicConfig(filename='app.log', level=logging.DEBUG)
+
+query_text = f"(Todays Date: {datetime.now().strftime('%Y-%b-%d')}) Revise and improve"\
+            " the article by incorporating relevant information from the comments."\
+            " Ensure the content is clear, engaging, and easy to understand for a"\
+            " general audience. Avoid technical language, present facts objectively,"\
+            " and summarize key comments from Reddit. Ensure that the overall"\
+            " sentiment expressed in the comments is accurately reflected. Optimize"\
+            " for highly original content. Don't be trolled by joke comments. Ensure"\
+            " its written professionally, in a way that is appropriate for the"\
+            " situation. Format the document using markdown and include links from the"\
+            " original article/reddit thread."
+
+settings =  {
+        "system_role": "You are a helpful assistant.",
+        "query": query_text,
+        "chunk_token_length": 2000,
+        "max_number_of_summaries": 1,
+        "max_token_length": 4097,
+        "selected_model": "text-davinci-003",
+        "selected_model_type": "OpenAI Instruct"
+    }
 
 # setup openai
 openai.api_key = config.openai_api_key
 if config.openai_api_base is not None:
     openai.api_base = config.openai_api_base
 
+YOUR_API_KEY = '70680f97-52fd-48ff-b0c5-138a0bdc38af' #@param {type:"string"}
+# find ENV (cloud region) next to API key in console
+YOUR_ENV = 'gcp-starter' #@param {type:"string"}
+
+pinecone.init(
+    api_key=YOUR_API_KEY,
+    environment=YOUR_ENV
+)
 
 OPENAI_COMPLETION_OPTIONS = {
     "temperature": 0.7,
@@ -28,6 +69,24 @@ class ChatGPT:
     def __init__(self, model="gpt-3.5-turbo"):
         assert model in {"text-davinci-003", "gpt-3.5-turbo-16k", "gpt-3.5-turbo", "gpt-4"}, f"Unknown model: {model}"
         self.model = model
+        # self.embed = OpenAIEmbeddings(
+        #     model='text-embedding-ada-002',
+        #     openai_api_key=openai.api_key
+        # )
+        # self.index_name = 'reddit-chatbot-telegram'
+        # self.vectorstore=None
+        # if self.index_name not in pinecone.list_indexes():
+        #     # we create a new index
+        #     pinecone.create_index(
+        #         name=self.index_name,
+        #         metric='dotproduct',
+        #         dimension=1536  # 1536 dim of text-embedding-ada-002
+        #     )
+        # self.index = pinecone.GRPCIndex(self.index_name)
+        # self.text_field = 'text'
+        # self.vectorstore = Pinecone(
+        #     pinecone.Index(self.index_name), self.embed.embed_query, self.text_field
+        # )
 
     async def send_message(self, message, dialog_messages=[], chat_mode="assistant"):
         if chat_mode not in config.chat_modes.keys():
@@ -90,9 +149,66 @@ class ChatGPT:
                 if self.model in {"gpt-3.5-turbo-16k", "gpt-3.5-turbo", "gpt-4"}:
                     if reddit_utils.is_reddit_url(message):
                         messages = self._generate_prompt_for_thread(message, chat_mode)
+                        
                     else:
                         messages = self._generate_prompt_messages(message, dialog_messages, chat_mode)
+                    # HERE STARTS THE CODE FOR LANGCHAIN ###############################3
 
+                    # # chat completion llm
+                    # llm = ChatOpenAI(
+                    #     openai_api_key=openai.api_key ,
+                    #     model_name='gpt-3.5-turbo',
+                    #     temperature=0.5
+                    # )
+                    # # conversational memory
+                    # conversational_memory = ConversationBufferWindowMemory(
+                    #     memory_key='chat_history',
+                    #     k=10,
+                    #     return_messages=True
+                    # )
+                    # # retrieval qa chain
+                    # qa = RetrievalQA.from_chain_type(
+                    #     llm=llm,
+                    #     chain_type="stuff",
+                    #     verbose=True,
+                    #     retriever=self.vectorstore.as_retriever()
+                    # )
+
+                    # tools = [
+                    #     Tool(
+                    #         name='Knowledge Base',
+                    #         func=qa.run,
+                    #         description=(
+                    #             'use this tool for every query to get '
+                    #             'more information and stories on the topic'
+                    #         )
+                    #     )
+                    # ]
+
+                    # agent = initialize_agent(
+                    #     agent='chat-conversational-react-description',
+                    #     tools=tools,
+                    #     llm=llm,
+                    #     verbose=True,
+                    #     max_iterations=3,
+                    #     early_stopping_method='generate',
+                    #     memory=conversational_memory
+                    # )
+
+                    # sys_msg = """Answer the user's questions based on the context provided. If the context is not relevant to the question, please use your own knowledge base to answer the question. 
+                    # """
+
+                    # prompt = agent.agent.create_prompt(
+                    #     system_message=sys_msg,
+                    #     tools=tools
+                    # )
+                    # agent.agent.llm_chain.prompt = prompt
+                    # response = agent(message)
+                    # logging.info(response)
+                    # n_input_tokens, n_output_tokens = self._count_tokens_from_messages(message, response['output'], model=self.model)
+                    # n_first_dialog_messages_removed = n_dialog_messages_before - len(dialog_messages)
+                    # return "finished", response['output'], (n_input_tokens, n_output_tokens), n_first_dialog_messages_removed
+                    # HERE ENDS THE CODE FOR LANGCHAIN ######################################
                     r_gen = await openai.ChatCompletion.acreate(
                         model=self.model,
                         messages=messages,
@@ -143,6 +259,8 @@ class ChatGPT:
     def _generate_prompt_for_thread(self, url, chat_mode):
         reddit_data = reddit_utils.get_reddit_praw(url)
 
+        prompts: List[str] = []
+
         title, selftext, subreddit, comments = (
             reddit_data["title"],
             reddit_data["selftext"],
@@ -156,6 +274,51 @@ class ChatGPT:
         #NOTE: Setting chunk token length to 2000 for now
         groups = llm_utils.group_bodies_into_chunks(comments, 2000)
 
+        #################################################################################3
+        # grouped_data = llm_utils.group_bodies_into_chunks(comments, 100)
+        # data = pd.DataFrame(grouped_data, columns=['context'])
+        # data['name'] = subreddit
+        # data.drop_duplicates(subset='context', keep='first', inplace=True)
+
+        # from uuid import uuid4
+
+        # # Reset index and ensure 'index' column is added
+        # data = data.reset_index(drop=True)
+        # data = data.reset_index()
+        # batch_size = 100
+
+        # for i in range(0, len(data), batch_size):
+        #     # get end of batch
+        #     i_end = min(len(data), i+batch_size)
+        #     batch = data.iloc[i:i_end]
+
+        #     # first get metadata fields for this record
+        #     metadatas = [{
+        #     self.text_field : record[1],  # 'text' will contain the same data as 'context'
+        #     'name': record[2]
+        #     } for record in batch.itertuples(index=False)]
+
+        #     # print(metadatas)
+        #     # get the list of contexts / documents
+        #     documents = batch['context'].tolist()
+
+        #     # create document embeddings
+        #     embeds = self.embed.embed_documents(documents)
+
+        #     # get IDs and convert them to strings
+        #     ids = batch['index'].astype(str).tolist()
+
+        #     # add everything to pinecone
+        #     self.index.upsert(vectors=list(zip(ids, embeds, metadatas)))
+
+        # # switch back to normal index for langchain
+        # self.index = pinecone.Index(self.index_name)
+
+        # self.vectorstore = Pinecone(
+        #     self.index, self.embed.embed_query, self.text_field
+        # )
+
+        ##################################################################################
 
         if len(groups) == 0:
             groups = ["No Comments"]
@@ -170,8 +333,26 @@ class ChatGPT:
             else ["No Comments"]
         )
 
-        
-        return [{"role": "system", "content": "Doing good with the URL so far"}]
+        init_prompt = f"{title}\n{selftext}"
+
+        system_role, query, max_tokens = (
+            settings["system_role"],
+            settings["query"],
+            settings["max_token_length"],
+        )
+
+        for i, comment_group in enumerate(groups[:settings["max_number_of_summaries"]]):
+            complete_prompt = (
+                f"{query}\n\n"
+                + "```"
+                + f"Title: {init_prompt}\n\n"
+                + f'<Comments subreddit="r/{subreddit}">\n{comment_group}\n</Comments>\n'
+                + "```"
+            )
+
+            prompts.append(complete_prompt)
+
+        return [{"role": "system", "content": complete_prompt}]
 
     def _generate_prompt(self, message, dialog_messages, chat_mode):
         prompt = config.chat_modes[chat_mode]["prompt_start"]

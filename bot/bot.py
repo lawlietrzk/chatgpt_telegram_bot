@@ -154,7 +154,7 @@ async def message_handle(update: Update, context: CallbackContext, message=None,
                  return
             
             dialog_messages = db.get_dialog_messages(user_id, dialog_id=None)
-    
+            
             parse_mode = {
                 "html": ParseMode.HTML,
                 "markdown": ParseMode.MARKDOWN
@@ -166,6 +166,7 @@ async def message_handle(update: Update, context: CallbackContext, message=None,
                 answer, (n_input_tokens, n_output_tokens), n_first_dialog_messages_removed = await redditgpt_instance.send_qa_response(
                     _message,
                     dialog_messages=dialog_messages,
+                    user_id = user_id,
                     chat_mode=chat_mode
                 )
                 async def fake_gen():
@@ -176,6 +177,7 @@ async def message_handle(update: Update, context: CallbackContext, message=None,
                 gen = redditgpt_instance.send_message(
                     _message,
                     dialog_messages=dialog_messages,
+                    user_id=user_id,
                     chat_mode=chat_mode,
                     is_url = is_url
                 )

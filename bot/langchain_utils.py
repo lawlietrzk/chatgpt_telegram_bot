@@ -9,6 +9,7 @@ from datetime import datetime
 import pandas as pd
 import pinecone
 import database
+from uuid import uuid4
 
 from langchain.chat_models import ChatOpenAI
 from langchain.chains.conversation.memory import ConversationBufferWindowMemory
@@ -90,7 +91,7 @@ class RedditGPT:
             pinecone.Index(self.index_name), self.embed.embed_query, self.text_field
         )
 
-    async def send_qa_response(self, message, dialog_messages=[], chat_mode="assistant"):
+    async def send_qa_response(self, message, user_id, dialog_messages=[], chat_mode="assistant"):
         if chat_mode not in config.chat_modes.keys():
             raise ValueError(f"Chat mode {chat_mode} is not supported")
 
@@ -117,6 +118,9 @@ class RedditGPT:
                         chain_type="stuff",
                         retriever=self.vectorstore.as_retriever()
                     )
+                    qa.retriever.search_kwargs = {
+                        "filter": {"user_id": {"$eq": user_id}}
+                    }
                     answer = qa.run(message)
                     n_input_tokens, n_output_tokens = 0,0
 
@@ -135,7 +139,7 @@ class RedditGPT:
 
         return answer, (n_input_tokens, n_output_tokens), n_first_dialog_messages_removed
 
-    async def send_message(self, message, dialog_messages=[], chat_mode="assistant", is_url = False):
+    async def send_message(self, message, user_id, dialog_messages=[], chat_mode="assistant", is_url = False):
         if chat_mode not in config.chat_modes.keys():
             raise ValueError(f"Chat mode {chat_mode} is not supported")
 
@@ -145,7 +149,7 @@ class RedditGPT:
             try:
                 if self.model in {"gpt-3.5-turbo"}:
                     if is_url: #If reddit url
-                        messages = self._generate_prompt_for_thread(message, chat_mode)
+                        messages = self._generate_prompt_for_thread(message, chat_mode, user_id)
                     else:
                         messages = self._generate_prompt_messages(message, dialog_messages, chat_mode)
 
@@ -180,10 +184,16 @@ class RedditGPT:
 
         yield "finished", answer, (n_input_tokens, n_output_tokens), n_first_dialog_messages_removed
 
-    def _generate_prompt_for_thread(self, url, chat_mode):
+    def _generate_prompt_for_thread(self, url, chat_mode, user_id):
         reddit_data = reddit_utils.get_reddit_praw(url)
 
         prompts: List[str] = []
+        pinecone.delete_index(self.index_name)
+        pinecone.create_index(
+            name=self.index_name,
+            metric='dotproduct',
+            dimension=1536  # 1536 dim of text-embedding-ada-002
+        )
 
         title, selftext, subreddit, comments = (
             reddit_data["title"],
@@ -202,11 +212,13 @@ class RedditGPT:
         grouped_data = llm_utils.group_bodies_into_chunks(comments, 100)
         data = pd.DataFrame(grouped_data, columns=['context'])
         data['name'] = subreddit
+        data['user_id'] = user_id
+        data['uuid'] = [uuid4() for _ in range(len(data.index))]
         data.drop_duplicates(subset='context', keep='first', inplace=True)
 
         self.index = pinecone.GRPCIndex(self.index_name)
 
-        from uuid import uuid4
+
 
         # Reset index and ensure 'index' column is added
         data = data.reset_index(drop=True)
@@ -221,7 +233,8 @@ class RedditGPT:
             # first get metadata fields for this record
             metadatas = [{
             self.text_field : record[1],  # 'text' will contain the same data as 'context'
-            'name': record[2]
+            'name': record[2],
+            'user_id': record[3]
             } for record in batch.itertuples(index=False)]
 
             # print(metadatas)
@@ -232,7 +245,7 @@ class RedditGPT:
             embeds = self.embed.embed_documents(documents)
 
             # get IDs and convert them to strings
-            ids = batch['index'].astype(str).tolist()
+            ids = batch['uuid'].astype(str).tolist()
 
             # add everything to pinecone
             self.index.upsert(vectors=list(zip(ids, embeds, metadatas)))

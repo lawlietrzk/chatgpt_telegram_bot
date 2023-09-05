@@ -22,8 +22,8 @@ from langchain.vectorstores import Pinecone
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
 logging.basicConfig(filename='app.log', level=logging.DEBUG)
 
-query_text = f"(Todays Date: {datetime.now().strftime('%Y-%b-%d')}) Revise and improve"\
-            " the article by incorporating relevant information from the comments."\
+query_text = f"(Todays Date: {datetime.now().strftime('%Y-%b-%d')}) Revise and summarize"\
+            " the article in 250 words or less by incorporating relevant information from the comments."\
             " Ensure the content is clear, engaging, and easy to understand for a"\
             " general audience. Avoid technical language, present facts objectively,"\
             " and summarize key comments from Reddit. Ensure that the overall"\
@@ -36,7 +36,7 @@ query_text = f"(Todays Date: {datetime.now().strftime('%Y-%b-%d')}) Revise and i
 settings =  {
         "system_role": "You are a helpful assistant.",
         "query": query_text,
-        "chunk_token_length": 2000,
+        "chunk_token_length": 1000,
         "max_number_of_summaries": 1,
         "max_token_length": 4097,
         "selected_model": "text-davinci-003",
@@ -208,8 +208,40 @@ class RedditGPT:
         #NOTE: Setting chunk token length to 2000 for now
         groups = llm_utils.group_bodies_into_chunks(comments, 2000)
 
+        if len(groups) == 0:
+            groups = ["No Comments"]
+
+        if (selftext is None) or (len(selftext) == 0):
+            selftext = "No selftext"
+        
+        #NOTE: Setting chunk token length to 2000 for now
+        groups = (
+            llm_utils.group_bodies_into_chunks(comments, 2000)
+            if len(groups) > 0
+            else ["No Comments"]
+        )
+
+        init_prompt = f"{title}\n{selftext}"
+
+        system_role, query, max_tokens = (
+            settings["system_role"],
+            settings["query"],
+            settings["max_token_length"],
+        )
+
+        for i, comment_group in enumerate(groups[:settings["max_number_of_summaries"]]):
+            complete_prompt = (
+                f"{query}\n\n"
+                + "```"
+                + f"Title: {init_prompt}\n\n"
+                + f'<Comments subreddit="r/{subreddit}">\n{comment_group}\n</Comments>\n'
+                + "```"
+            )
+
+            prompts.append(complete_prompt)
+
         #################################################################################3
-        grouped_data = llm_utils.group_bodies_into_chunks(comments, 100)
+        grouped_data = llm_utils.group_bodies_into_chunks(complete_prompt, 2000)
         data = pd.DataFrame(grouped_data, columns=['context'])
         data['name'] = subreddit
         data['user_id'] = user_id
@@ -217,8 +249,6 @@ class RedditGPT:
         data.drop_duplicates(subset='context', keep='first', inplace=True)
 
         self.index = pinecone.GRPCIndex(self.index_name)
-
-
 
         # Reset index and ensure 'index' column is added
         data = data.reset_index(drop=True)
@@ -259,37 +289,6 @@ class RedditGPT:
 
         ##################################################################################
 
-        if len(groups) == 0:
-            groups = ["No Comments"]
-
-        if (selftext is None) or (len(selftext) == 0):
-            selftext = "No selftext"
-        
-        #NOTE: Setting chunk token length to 2000 for now
-        groups = (
-            llm_utils.group_bodies_into_chunks(comments, 2000)
-            if len(groups) > 0
-            else ["No Comments"]
-        )
-
-        init_prompt = f"{title}\n{selftext}"
-
-        system_role, query, max_tokens = (
-            settings["system_role"],
-            settings["query"],
-            settings["max_token_length"],
-        )
-
-        for i, comment_group in enumerate(groups[:settings["max_number_of_summaries"]]):
-            complete_prompt = (
-                f"{query}\n\n"
-                + "```"
-                + f"Title: {init_prompt}\n\n"
-                + f'<Comments subreddit="r/{subreddit}">\n{comment_group}\n</Comments>\n'
-                + "```"
-            )
-
-            prompts.append(complete_prompt)
 
         return [{"role": "system", "content": complete_prompt}]
 
